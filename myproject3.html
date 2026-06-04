@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Air Drawing App</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #0b0b12;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            color: #fff;
+        }
+
+        /* Drawing Canvas */
+        #drawingCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: #0b0b12;
+            z-index: 1;
+        }
+
+        /* Mirrored Video Feed Overlay */
+        #webcam {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 200px;
+            height: 150px;
+            border-radius: 12px;
+            border: 2px solid #3a3a50;
+            transform: scaleX(-1); /* Mirror the video */
+            z-index: 10;
+            background: #000;
+            object-fit: cover;
+        }
+
+        /* Visual Feedback Cursor */
+        #pointer {
+            position: absolute;
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            background: white;
+            border: 2px solid #000;
+            pointer-events: none;
+            transform: translate(-50%, -50%);
+            z-index: 5;
+            display: none;
+            box-shadow: 0 0 10px #fff;
+            transition: background 0.2s, box-shadow 0.2s;
+        }
+
+        /* Floating Control Panel */
+        .control-panel {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(20, 20, 35, 0.85);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 15px 25px;
+            border-radius: 50px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            z-index: 10;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        label {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #8a8ab0;
+        }
+
+        input[type="color"] {
+            -webkit-appearance: none;
+            border: none;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+            background: transparent;
+        }
+
+        input[type="color"]::-webkit-color-swatch-wrapper {
+            padding: 0;
+        }
+
+        input[type="color"]::-webkit-color-swatch {
+            border: 2px solid #fff;
+            border-radius: 50%;
+        }
+
+        input[type="range"] {
+            width: 100px;
+            accent-color: #00ffcc;
+            cursor: pointer;
+        }
+
+        .status-badge {
+            background: #252538;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: bold;
+            letter-spacing: 0.5px;
+            min-width: 90px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        /* Status Colors */
+        .status-draw { color: #00ffcc; text-shadow: 0 0 10px rgba(0,255,204,0.5); }
+        .status-erase { color: #ff3366; text-shadow: 0 0 10px rgba(255,51,102,0.5); }
+        .status-pause { color: #ffcc00; text-shadow: 0 0 10px rgba(255,204,0,0.5); }
+        .status-none { color: #8a8ab0; }
+
+        .btn-clear {
+            background: #ff3366;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 13px;
+            transition: opacity 0.2s;
+        }
+
+        .btn-clear:hover {
+            opacity: 0.9;
+        }
+
+        /* Gesture Instruction Guide */
+        .guide {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(20, 20, 35, 0.7);
+            padding: 15px;
+            border-radius: 12px;
+            font-size: 12px;
+            line-height: 1.6;
+            z-index: 10;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            color: #cdd;
+        }
+        .guide b { color: #fff; }
+    </style>
+</head>
+<body>
+
+    <canvas id="drawingCanvas"></canvas>
+    <video id="webcam" autoplay playsinline></video>
+    <div id="pointer"></div>
+
+    <div class="control-panel">
+        <div class="control-group">
+            <label for="colorPicker">Color</label>
+            <input type="color" id="colorPicker" value="#00ffcc">
+        </div>
+        
+        <div class="control-group">
+            <label for="brushSize">Size</label>
+            <input type="range" id="brushSize" min="5" max="40" value="15">
+        </div>
+
+        <div class="control-group">
+            <label>Mode</label>
+            <div id="status" class="status-badge status-none">No Hand</div>
+        </div>
+
+        <button class="btn-clear" id="clearBtn">Clear All</button>
+    </div>
+
+    <div class="guide">
+        <b>Gestures Control Guide:</b><br>
+        ☝️ <b>Index Finger Up:</b> Draw Glow Trail<br>
+        🖐️ <b>Open Palm:</b> Erase Canvas<br>
+        ✊ <b>Closed Fist:</b> Pause Drawing/Tracking
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('drawingCanvas');
+        const ctx = canvasElement.getContext('2d');
+        const pointer = document.getElementById('pointer');
+        const statusBadge = document.getElementById('status');
+        
+        // UI Inputs
+        const colorPicker = document.getElementById('colorPicker');
+        const brushSizeInput = document.getElementById('brushSize');
+        const clearBtn = document.getElementById('clearBtn');
+
+        // Track state variables
+        let lastX = null;
+        let lastY = null;
+        let isFirstPointOfStroke = true;
+
+        // Resize Canvas to fit screen initially
+        function initCanvas() {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+            // Establish dark canvas background baseline
+            ctx.fillStyle = '#0b0b12';
+            ctx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+        }
+        initCanvas();
+
+        // Clear button handler
+        clearBtn.addEventListener('click', () => {
+            ctx.fillStyle = '#0b0b12';
+            ctx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+        });
+
+        // Helper function to check if a finger is extended
+        // MediaPipe Y axis goes downward (0 at top, 1 at bottom)
+        function isFingerExtended(tip, pip) {
+            return tip.y < pip.y;
+        }
+
+        function interpretGesture(landmarks) {
+            // Check major four fingers (excluding thumb for easier tracking consistency)
+            const indexUp = isFingerExtended(landmarks[8], landmarks[6]);
+            const middleUp = isFingerExtended(landmarks[12], landmarks[10]);
+            const ringUp = isFingerExtended(landmarks[16], landmarks[14]);
+            const pinkyUp = isFingerExtended(landmarks[20], landmarks[18]);
+
+            // 1. Open Palm (All up) -> ERASE
+            if (indexUp && middleUp && ringUp && pinkyUp) {
+                return 'ERASE';
+            }
+            // 2. Closed Fist (All down) -> PAUSE
+            if (!indexUp && !middleUp && !ringUp && !pinkyUp) {
+                return 'PAUSE';
+            }
+            // 3. Just Index Finger Up -> DRAW
+            if (indexUp && !middleUp && !ringUp && !pinkyUp) {
+                return 'DRAW';
+            }
+
+            return 'NONE';
+        }
+
+        function onResults(results) {
+            // If no hands detected
+            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+                statusBadge.textContent = "No Hand";
+                statusBadge.className = "status-badge status-none";
+                pointer.style.display = "none";
+                lastX = null;
+                lastY = null;
+                isFirstPointOfStroke = true;
+                return;
+            }
+
+            const landmarks = results.multiHandLandmarks[0];
+            const gesture = interpretGesture(landmarks);
+            
+            // Track index finger tip (Landmark 8)
+            const indexTip = landmarks[8];
+            
+            // Map coordinate space. Mirror the tracking horizontally by subtracting from 1.
+            const x = (1 - indexTip.x) * canvasElement.width;
+            const y = indexTip.y * canvasElement.height;
+
+            // Update UI feedback element (pointer dot)
+            pointer.style.display = "block";
+            pointer.style.left = `${x}px`;
+            pointer.style.top = `${y}px`;
+
+            // Adjust status bar UI and canvas configurations based on gesture state
+            if (gesture === 'DRAW') {
+                statusBadge.textContent = "Drawing";
+                statusBadge.className = "status-badge status-draw";
+                pointer.style.background = colorPicker.value;
+                pointer.style.boxShadow = `0 0 15px ${colorPicker.value}`;
+
+                ctx.beginPath();
+                ctx.globalCompositeOperation = 'source-over';
+                
+                // Configure Neon Glow Styles
+                ctx.strokeStyle = colorPicker.value;
+                ctx.lineWidth = brushSizeInput.value;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                
+                // Shadow blur creates the neon ambiance 
+                ctx.shadowColor = colorPicker.value;
+                ctx.shadowBlur = brushSizeInput.value * 1.5;
+
+                if (isFirstPointOfStroke || lastX === null || lastY === null) {
+                    ctx.moveTo(x, y);
+                    isFirstPointOfStroke = false;
+                } else {
+                    ctx.moveTo(lastX, lastY);
+                }
+                
+                ctx.lineTo(x, y);
+                ctx.stroke();
+
+                lastX = x;
+                lastY = y;
+
+            } else if (gesture === 'ERASE') {
+                statusBadge.textContent = "Erasing";
+                statusBadge.className = "status-badge status-erase";
+                pointer.style.background = "#ff3366";
+                pointer.style.boxShadow = "0 0 15px #ff3366";
+
+                ctx.beginPath();
+                // Overwrite drawn pixels cleanly back to the background color
+                ctx.globalCompositeOperation = 'source-over';
+                ctx.strokeStyle = '#0b0b12'; 
+                ctx.lineWidth = brushSizeInput.value * 3; // Make eraser profile wider
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                
+                // Terminate shadows for a clean edge wipe
+                ctx.shadowBlur = 0; 
+
+                if (isFirstPointOfStroke || lastX === null || lastY === null) {
+                    ctx.moveTo(x, y);
+                    isFirstPointOfStroke = false;
+                } else {
+                    ctx.moveTo(lastX, lastY);
+                }
+                
+                ctx.lineTo(x, y);
+                ctx.stroke();
+
+                lastX = x;
+                lastY = y;
+
+            } else if (gesture === 'PAUSE') {
+                statusBadge.textContent = "Paused";
+                statusBadge.className = "status-badge status-pause";
+                pointer.style.background = "#ffcc00";
+                pointer.style.boxShadow = "0 0 15px #ffcc00";
+                
+                // Reset continuity hooks so drawing doesn't awkwardly jump across the screen
+                lastX = null;
+                lastY = null;
+                isFirstPointOfStroke = true;
+            } else {
+                statusBadge.textContent = "Tracking";
+                statusBadge.className = "status-badge status-none";
+                pointer.style.background = "#ffffff";
+                pointer.style.boxShadow = "0 0 10px #ffffff";
+                
+                lastX = null;
+                lastY = null;
+                isFirstPointOfStroke = true;
+            }
+        }
+
+        // Initialize MediaPipe Hands API Instance
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
+        });
+
+        hands.onResults(onResults);
+
+        // Instantiate and initiate camera stream pipeline
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({ image: videoElement });
+            },
+            width: 640,
+            height: 480
+        });
+        
+        camera.start();
+
+        // Dynamically correct scaling issues on display resizing 
+        window.addEventListener('resize', () => {
+            // Backup current sketches safely
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = canvasElement.width;
+            tempCanvas.height = canvasElement.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.drawImage(canvasElement, 0, 0);
+
+            // Resize
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+            
+            // Restore context variables and data
+            ctx.fillStyle = '#0b0b12';
+            ctx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+            ctx.drawImage(tempCanvas, 0, 0);
+        });
+    </script>
+</body>
+</html>
